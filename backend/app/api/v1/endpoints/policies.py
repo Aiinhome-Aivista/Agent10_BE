@@ -1,13 +1,14 @@
 """policies.py"""
 import uuid
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from backend.app.core.database import get_db
 from backend.app.core.security import get_current_user, require_roles
-from backend.app.models.all_models import Policy, Quote, Case, User
+from backend.app.models.all_models import Policy, Quote, Case, User, CaseStage, CaseStatus
 
 router = APIRouter(prefix="/policies", tags=["policies"])
 
@@ -51,9 +52,63 @@ async def customer_policies(customer_id: str, db: AsyncSession = Depends(get_db)
 
 @router.get("/")
 async def all_policies(skip: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db),
-                        current_user=Depends(require_roles("SUPER_ADMIN", "COMPLIANCE"))):
+                        current_user=Depends(require_roles("SUPER_ADMIN", "UNDERWRITER"))):
     r = await db.execute(select(Policy).order_by(Policy.created_at.desc()).offset(skip).limit(limit))
     policies = r.scalars().all()
     return {"policies": [{"id": p.id, "case_id": p.case_id, "policy_number": p.policy_number,
                            "insurer_name": p.insurer_name, "sum_assured": p.sum_assured,
                            "status": p.status} for p in policies]}
+
+
+@router.post("/{policy_id}/issue")
+async def issue_policy(
+    policy_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_roles("SUPER_ADMIN", "UNDERWRITER"))
+):
+    """Issue a policy and transition case to COMPLETED stage"""
+    # 1. Find and validate policy
+    r = await db.execute(select(Policy).where(Policy.id == policy_id))
+    policy = r.scalar_one_or_none()
+    if not policy:
+        raise HTTPException(404, "Policy not found")
+    
+    # 2. Find associated case
+    cr = await db.execute(select(Case).where(Case.id == policy.case_id))
+    case = cr.scalar_one_or_none()
+    if not case:
+        raise HTTPException(404, "Associated case not found")
+    
+    # 3. Validate policy is in POLICY_ISSUANCE stage
+    if case.current_stage != CaseStage.POLICY_ISSUANCE:
+        raise HTTPException(
+            400,
+            f"Policy can only be issued from POLICY_ISSUANCE stage. Current stage: {case.current_stage}"
+        )
+    
+    # 4. Update policy status to ISSUED
+    policy.status = "ISSUED"
+    policy.issued_at = datetime.utcnow()
+    
+    # 5. Update case to COMPLETED
+    await db.execute(
+        update(Case)
+        .where(Case.id == policy.case_id)
+        .values(
+            current_stage=CaseStage.COMPLETED,
+            status=CaseStatus.COMPLETED,
+            last_activity_at=datetime.utcnow()
+        )
+    )
+    
+    db.add(policy)
+    await db.commit()
+    await db.refresh(policy)
+    
+    return {
+        "message": "Policy issued successfully",
+        "policy_id": policy.id,
+        "case_id": policy.case_id,
+        "policy_status": policy.status,
+        "issued_at": policy.issued_at.isoformat() if policy.issued_at else None
+    }

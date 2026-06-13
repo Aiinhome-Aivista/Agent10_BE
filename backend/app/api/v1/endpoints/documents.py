@@ -9,14 +9,20 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from configs.base import settings
 from backend.app.core.database import get_db
 from backend.app.core.security import get_current_user, require_roles
 from backend.app.models.user import User, UserRole
 from backend.app.models.all_models import MedicalDocument, MedicalRequest
+from fastapi import Header
+from typing import Optional
+from fastapi.responses import FileResponse
+from backend.app.core.security import decode_token
+from backend.app.repositories.user_repository import UserRepository
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-UPLOAD_DIR = os.getenv("FILE_UPLOAD_PATH", "/tmp/q2p-uploads")
+UPLOAD_DIR = settings.FILE_UPLOAD_PATH
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -99,6 +105,36 @@ async def list_documents(
     }
 
 
+@router.get("/case/{case_id}")
+async def list_documents_by_case(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all documents attached to any medical request for a case."""
+    # join MedicalDocument -> MedicalRequest to filter by case_id
+    from sqlalchemy import join
+
+    j = join(MedicalDocument, MedicalRequest, MedicalDocument.medical_request_id == MedicalRequest.id)
+    result = await db.execute(
+        select(MedicalDocument).select_from(j).where(MedicalRequest.case_id == case_id)
+    )
+    docs = result.scalars().all()
+    return {
+        "documents": [
+            {
+                "id": d.id,
+                "document_type": d.document_type,
+                "file_name": d.file_name,
+                "file_size": d.file_size,
+                "verified": bool(d.verified),
+                "uploaded_at": d.uploaded_at.isoformat(),
+            }
+            for d in docs
+        ]
+    }
+
+
 @router.patch("/{document_id}/verify")
 async def verify_document(
     document_id: str,
@@ -116,3 +152,61 @@ async def verify_document(
     )
     await db.commit()
     return {"message": "Document verified"}
+
+
+@router.get("/{document_id}/view")
+async def view_medical_document(
+    document_id: str,
+    token: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the stored medical document file as an inline response.
+
+    Accepts either `token` query parameter or `Authorization: Bearer <token>` header.
+    """
+    # Resolve token from header if not provided
+    auth_token = token
+    if not auth_token and authorization:
+        if authorization.startswith("Bearer "):
+            auth_token = authorization.split(" ")[1]
+
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="Authentication token required")
+
+    try:
+        payload = decode_token(auth_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = await UserRepository(db).get_by_id(payload.get("sub"))
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="Unauthorized or inactive user")
+
+    r = await db.execute(select(MedicalDocument).where(MedicalDocument.id == document_id))
+    doc = r.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if not doc.file_path or not os.path.exists(doc.file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    media_type = doc.mime_type or "application/octet-stream"
+    if not media_type or media_type == "application/octet-stream":
+        ext = (os.path.splitext(doc.file_name or "")[1] or "").lower()
+        if ext == ".pdf":
+            media_type = "application/pdf"
+        elif ext == ".txt":
+            media_type = "text/plain"
+        elif ext in {".jpg", ".jpeg"}:
+            media_type = "image/jpeg"
+        elif ext == ".png":
+            media_type = "image/png"
+        elif ext == ".gif":
+            media_type = "image/gif"
+        elif ext == ".bmp":
+            media_type = "image/bmp"
+        elif ext == ".tiff" or ext == ".tif":
+            media_type = "image/tiff"
+
+    return FileResponse(doc.file_path, media_type=media_type, filename=doc.file_name, content_disposition_type="inline")
