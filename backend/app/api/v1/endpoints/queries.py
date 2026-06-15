@@ -15,13 +15,22 @@ router = APIRouter(prefix="/queries", tags=["queries"])
 
 @router.get("/mine")
 async def my_queries(db: AsyncSession = Depends(get_db), current_user=Depends(get_current_user)):
-    # Return escalations assigned to the current customer's cases and not resolved, with their medical requests
-    r = await db.execute(select(EscalationLog).where(EscalationLog.assigned_to_role == "CUSTOMER", EscalationLog.resolved == 0))
+    # Return unresolved escalations assigned to the current customer's cases only
+    r = await db.execute(
+        select(EscalationLog)
+        .where(
+            EscalationLog.assigned_to_role == "CUSTOMER",
+            EscalationLog.resolved == 0,
+            EscalationLog.case_id.in_(
+                select(Case.id).where(Case.customer_id == str(current_user.id))
+            ),
+        )
+    )
     items = r.scalars().all()
     results = []
     for e in items:
         # load case summary
-        cr = await db.execute(select(Case).where(Case.id == e.case_id))
+        cr = await db.execute(select(Case).where(Case.id == e.case_id, Case.customer_id == str(current_user.id)))
         c = cr.scalar_one_or_none()
         
         # fetch associated MedicalRequest for this query

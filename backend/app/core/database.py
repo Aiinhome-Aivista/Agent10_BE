@@ -96,7 +96,7 @@ async def ensure_compatibility():
         if not result.scalar_one():
             await conn.execute(
                 text(
-                    "ALTER TABLE cases ADD COLUMN kyc_status VARCHAR(50) DEFAULT 'PENDING_KYC' AFTER policy_tenure"
+                    "ALTER TABLE cases ADD COLUMN kyc_status VARCHAR(50) DEFAULT 'PENDING' AFTER policy_tenure"
                 )
             )
 

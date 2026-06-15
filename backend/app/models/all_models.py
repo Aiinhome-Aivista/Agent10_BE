@@ -91,7 +91,7 @@ class Case(Base):
     sum_assured = Column(Float)
     premium_budget = Column(Float)
     policy_tenure = Column(Integer)
-    kyc_status = Column(String(50), default="PENDING_KYC")
+    kyc_status = Column(String(50), default="PENDING")
     esign_status = Column(String(50), default="NOT_STARTED")
     profile_update_request = Column(Text)
     banker_approved = Column(Integer, default=0)
@@ -116,6 +116,24 @@ class Case(Base):
     medical_requests = relationship("MedicalRequest", back_populates="case")
     audit_logs = relationship("AuditLog", back_populates="case")
     stage_logs = relationship("WorkflowStageLog", back_populates="case")
+    kyc_documents = relationship("KycDocument", back_populates="case", cascade="all, delete-orphan")
+
+
+class KycDocument(Base):
+    __tablename__ = "kyc_documents"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    case_id = Column(String(36), ForeignKey("cases.id"), nullable=False)
+    customer_id = Column(String(36), nullable=False)
+    document_type = Column(String(100), nullable=False)
+    file_name = Column(String(500), nullable=False)
+    file_path = Column(String(1000), nullable=False)
+    file_size = Column(Integer)
+    mime_type = Column(String(100))
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(50), default="PENDING")
+    verified_by = Column(String(36))
+    verifier_remarks = Column(Text)
+    case = relationship("Case", back_populates="kyc_documents")
 
 
 # ─────────────────────────────── BANKER INTAKE ──────────────────────

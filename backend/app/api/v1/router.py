@@ -10,6 +10,7 @@ from backend.app.api.v1.endpoints import (
     underwriting,
     medical,
     documents,
+    kyc,
     queries,
     compliance,
     workflow,
@@ -28,6 +29,7 @@ api_router.include_router(admin.router)
 api_router.include_router(underwriting.router)
 api_router.include_router(medical.router)
 api_router.include_router(documents.router)
+api_router.include_router(kyc.router)
 api_router.include_router(queries.router)
 api_router.include_router(compliance.router)
 api_router.include_router(workflow.router)
