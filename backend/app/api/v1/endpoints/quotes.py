@@ -246,6 +246,7 @@ async def list_quotes(
                 "waiting_period_days": q.waiting_period_days,
                 "underwriting_requirements": q.underwriting_requirements,
                 "medical_requirements": q.medical_requirements,
+                "status": q.status.value if hasattr(q.status, "value") else q.status,
             }
             for q in quotes
         ]

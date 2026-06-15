@@ -145,6 +145,18 @@ async def verify_otp(
             selected_quote = quote_result.scalars().first()
 
         if selected_quote:
+            # Update selected quote's status to SELECTED and other quotes to REJECTED in database
+            await db.execute(
+                update(Quote)
+                .where(Quote.case_id == body.case_id, Quote.id == selected_quote.id)
+                .values(status="SELECTED")
+            )
+            await db.execute(
+                update(Quote)
+                .where(Quote.case_id == body.case_id, Quote.id != selected_quote.id)
+                .values(status="REJECTED")
+            )
+
             existing_policy = await db.execute(
                 select(Policy).where(Policy.case_id == body.case_id)
             )
@@ -267,6 +279,18 @@ async def verify_otp(
         selected_quote = quote_result.scalars().first()
 
     if selected_quote:
+        # Update selected quote's status to SELECTED and other quotes to REJECTED in database
+        await db.execute(
+            update(Quote)
+            .where(Quote.case_id == body.case_id, Quote.id == selected_quote.id)
+            .values(status="SELECTED")
+        )
+        await db.execute(
+            update(Quote)
+            .where(Quote.case_id == body.case_id, Quote.id != selected_quote.id)
+            .values(status="REJECTED")
+        )
+
         existing_policy = await db.execute(
             select(Policy).where(Policy.case_id == body.case_id)
         )
