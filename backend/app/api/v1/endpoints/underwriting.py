@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 
 from backend.app.core.database import get_db
 from backend.app.core.security import get_current_user, require_roles
-from backend.app.models.all_models import Case, CaseStage, Policy, User, EscalationLog
+from backend.app.models.all_models import Case, CaseStage, Policy, User, EscalationLog, MedicalRequest
 
 router = APIRouter(prefix="/underwriting", tags=["underwriting"])
 
@@ -24,7 +24,15 @@ class UWDecisionBody(BaseModel):
 @router.get("/queue")
 async def uw_queue(db: AsyncSession = Depends(get_db),
                    current_user=Depends(require_roles("UNDERWRITER", "SUPER_ADMIN"))):
-    r = await db.execute(select(Case).where(Case.current_stage == CaseStage.UNDERWRITING))
+    r = await db.execute(
+        select(Case).where(
+            Case.current_stage.in_([
+                CaseStage.PROPOSAL_GENERATION,
+                CaseStage.MEDICAL_COORDINATION,
+                CaseStage.UNDERWRITING,
+            ])
+        )
+    )
     cases = r.scalars().all()
     return {"queue": [{"id": c.id, "case_number": c.case_number, "sum_assured": c.sum_assured,
                         "stage": str(c.current_stage), "customer_profile": c.customer_profile,
@@ -81,7 +89,7 @@ async def uw_decision(body: UWDecisionBody, db: AsyncSession = Depends(get_db),
             data["status"] = "APPROVED"
         await db.execute(update(Policy).where(Policy.id == p.id).values(**data))
 
-    # If underwriter raised a query, create an escalation log for the customer to respond
+    # If underwriter raised a query, create an escalation log and a medical request
     if body.decision == "QUERY":
         db.add(
             EscalationLog(
@@ -94,11 +102,23 @@ async def uw_decision(body: UWDecisionBody, db: AsyncSession = Depends(get_db),
                 resolved=0,
             )
         )
+        db.add(
+            MedicalRequest(
+                id=str(uuid.uuid4()),
+                case_id=case.id,
+                customer_id=case.customer_id,
+                requirements=[body.remarks or "QUERY_RESPONSE"],
+                status="PENDING",
+                ops_remarks="Underwriter raised query",
+            )
+        )
 
     if body.decision == "APPROVED":
-        stage = "POLICY_ISSUANCE"
+        stage = CaseStage.POLICY_ISSUANCE
+    elif body.decision == "QUERY":
+        stage = CaseStage.MEDICAL_COORDINATION
     else:
-        stage = "EXCEPTION_HANDLING"
+        stage = CaseStage.EXCEPTION_HANDLING
 
     await db.execute(update(Case).where(Case.id == case.id).values(current_stage=stage))
     await db.commit()

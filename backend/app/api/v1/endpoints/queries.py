@@ -1,21 +1,21 @@
 """Customer query endpoints: list pending queries and reply/upload responses"""
 from datetime import datetime
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from backend.app.core.database import get_db
 from backend.app.core.security import get_current_user, require_roles
-from backend.app.models.all_models import EscalationLog, Case
-from backend.app.models.all_models import User
+from backend.app.models.all_models import Case, CaseStage, EscalationLog, MedicalRequest, MedicalDocument, User
 
 router = APIRouter(prefix="/queries", tags=["queries"])
 
 
 @router.get("/mine")
 async def my_queries(db: AsyncSession = Depends(get_db), current_user=Depends(get_current_user)):
-    # Return escalations assigned to the current customer's cases and not resolved
+    # Return escalations assigned to the current customer's cases and not resolved, with their medical requests
     r = await db.execute(select(EscalationLog).where(EscalationLog.assigned_to_role == "CUSTOMER", EscalationLog.resolved == 0))
     items = r.scalars().all()
     results = []
@@ -23,6 +23,15 @@ async def my_queries(db: AsyncSession = Depends(get_db), current_user=Depends(ge
         # load case summary
         cr = await db.execute(select(Case).where(Case.id == e.case_id))
         c = cr.scalar_one_or_none()
+        
+        # fetch associated MedicalRequest for this query
+        mr_res = await db.execute(
+            select(MedicalRequest)
+            .where(MedicalRequest.case_id == e.case_id, MedicalRequest.status == "PENDING")
+            .order_by(MedicalRequest.created_at.desc())
+        )
+        med_req = mr_res.scalars().first()
+        
         results.append({
             "id": e.id,
             "case_id": e.case_id,
@@ -30,21 +39,59 @@ async def my_queries(db: AsyncSession = Depends(get_db), current_user=Depends(ge
             "reason": e.reason,
             "created_at": e.created_at.isoformat() if e.created_at else None,
             "resolved": e.resolved,
+            "requirements": med_req.requirements if med_req else [],
+            "medical_request_id": med_req.id if med_req else None,
         })
     return {"queries": results}
 
 
 @router.post("/{escalation_id}/reply")
-async def reply_query(escalation_id: str, message: str = Form(...), files: List[UploadFile] = File(None), db: AsyncSession = Depends(get_db), current_user=Depends(require_roles("CUSTOMER","SUPER_ADMIN"))):
-    # Mark escalation as resolved. File attachments are expected to be uploaded via the /documents/upload endpoint
+async def reply_query(escalation_id: str, message: str | None = Form(None), files: List[UploadFile] = File(None), db: AsyncSession = Depends(get_db), current_user=Depends(require_roles("CUSTOMER","SUPER_ADMIN"))):
+    # Create or reuse pending medical request, mark escalation resolved, and move case back to UNDERWRITING
     r = await db.execute(select(EscalationLog).where(EscalationLog.id == escalation_id))
     e = r.scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Escalation not found")
-    # TODO: integrate with /documents/upload to persist attachments
+    # ensure case exists
+    cr = await db.execute(select(Case).where(Case.id == e.case_id))
+    case = cr.scalar_one_or_none()
+    if not case:
+        raise HTTPException(404, "Case not found")
+    if str(case.customer_id) != str(current_user.id):
+        raise HTTPException(403, "Not authorized to reply to this query")
+
+    # create or reuse a pending MedicalRequest for uploads
+    mr_res = await db.execute(
+        select(MedicalRequest)
+        .where(
+            MedicalRequest.case_id == e.case_id,
+            MedicalRequest.customer_id == str(current_user.id),
+            MedicalRequest.status == "PENDING",
+        )
+        .order_by(MedicalRequest.created_at.desc())
+    )
+    med_req = mr_res.scalars().first()
+    if not med_req:
+        med_req = MedicalRequest(
+            id=str(uuid.uuid4()),
+            case_id=e.case_id,
+            customer_id=str(current_user.id),
+            requirements=[e.reason or "QUERY_RESPONSE"],
+            status="PENDING",
+            ops_remarks="Customer response to query",
+        )
+        db.add(med_req)
+        await db.commit()
+        await db.refresh(med_req)
+
     e.resolved = 1
     e.resolved_at = datetime.utcnow()
     e.resolved_by = str(current_user.id)
     db.add(e)
+    await db.execute(
+        update(Case)
+        .where(Case.id == case.id)
+        .values(current_stage=CaseStage.UNDERWRITING)
+    )
     await db.commit()
-    return {"message": "Reply recorded, underwriter notified"}
+    return {"message": "Reply recorded, underwriter notified", "medical_request_id": med_req.id}
