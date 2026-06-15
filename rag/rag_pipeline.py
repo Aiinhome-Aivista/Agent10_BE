@@ -171,8 +171,8 @@ async def semantic_search(query: str, top_k: int = 5) -> List[Dict]:
     ):
         chunks.append({
             "text":     text,
-            "doc_id":   meta.get("doc_id"),
-            "title":    meta.get("title"),
+            "doc_id":   meta.get("doc_id") if meta else None,
+            "title":    meta.get("title") if meta else None,
             "score":    round(1 - dist, 4),
         })
     return chunks
@@ -186,10 +186,10 @@ async def list_documents() -> List[Dict]:
     all_items = col.get(include=["metadatas"])
     seen, docs = set(), []
     for meta in all_items["metadatas"]:
-        doc_id = meta.get("doc_id")
+        doc_id = meta.get("doc_id") if meta else None
         if doc_id and doc_id not in seen:
             seen.add(doc_id)
-            docs.append({"doc_id": doc_id, "title": meta.get("title", "Unknown")})
+            docs.append({"doc_id": doc_id, "title": meta.get("title", "Unknown") if meta else "Unknown"})
     return docs
 
 

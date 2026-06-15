@@ -46,8 +46,8 @@ class RagRetriever:
         ):
             chunks.append({
                 "text": doc,
-                "source": meta.get("source", "unknown"),
-                "title": meta.get("title", ""),
+                "source": meta.get("source", "unknown") if meta else "unknown",
+                "title": meta.get("title", "") if meta else "",
                 "similarity": round(1 - dist, 4),
             })
         return chunks

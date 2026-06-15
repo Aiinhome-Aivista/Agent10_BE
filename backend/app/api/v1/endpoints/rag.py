@@ -1,7 +1,9 @@
-import uuid, json, os, time
+import uuid, json, os, time, logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -251,7 +253,14 @@ async def rag_chat(
     history_str  = "\n".join([f"{m.role.upper()}: {m.content}" for m in history_msgs])
 
     prompt  = pm.rag_chat(body.message, chunks, graph_data, history_str)
-    llm_res = await llm.complete(prompt, llm_context)
+    try:
+        llm_res = await llm.complete(prompt, llm_context)
+        ai_response = llm_res["response"]
+        new_context = llm_res["context"]
+    except Exception as e:
+        logger.error(f"RAG chat LLM call failed: {e}")
+        ai_response = "I apologize, but the LLM service is currently offline or unreachable. Please try again later."
+        new_context = llm_context
 
     # Persist messages with sequential timestamps and chronological IDs to guarantee exact order
     user_time = datetime.utcnow()
@@ -264,7 +273,7 @@ async def rag_chat(
     )
     ai_msg = ConversationMessage(
         id=ai_msg_id, session_id=session.id, role="assistant",
-        content=llm_res["response"],
+        content=ai_response,
         retrieved_chunks=[{"text": c["text"][:200], "score": c["score"]} for c in chunks],
         graph_relations=graph_data,
         created_at=user_time + timedelta(seconds=1)
@@ -273,13 +282,13 @@ async def rag_chat(
     db.add(ai_msg)
 
     await db.execute(update(ConversationSession).where(ConversationSession.id == session.id).values(
-        context_store=json.dumps(llm_res["context"])
+        context_store=json.dumps(new_context)
     ))
     await db.commit()
 
     return {
         "session_id": session.id,
-        "response":   llm_res["response"],
+        "response":   ai_response,
         "sources":    [{"title": c.get("title"), "score": c.get("score")} for c in chunks],
     }
 
