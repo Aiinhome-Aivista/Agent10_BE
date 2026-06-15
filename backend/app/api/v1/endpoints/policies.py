@@ -112,3 +112,45 @@ async def issue_policy(
         "policy_status": policy.status,
         "issued_at": policy.issued_at.isoformat() if policy.issued_at else None
     }
+
+
+@router.get("/{policy_id}/proposal/download")
+async def download_proposal_pdf(
+    policy_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    from backend.app.models.all_models import Case
+    from backend.app.repositories.user_repository import UserRepository
+    from backend.app.services.document_generator import PDFGeneratorService
+    from fastapi.responses import FileResponse
+    
+    # 1. Fetch policy
+    r = await db.execute(select(Policy).where(Policy.id == policy_id))
+    policy = r.scalar_one_or_none()
+    if not policy:
+        # Fallback: check by case_id
+        r = await db.execute(select(Policy).where(Policy.case_id == policy_id))
+        policy = r.scalar_one_or_none()
+        if not policy:
+            raise HTTPException(status_code=404, detail="Policy not found")
+            
+    # 2. Fetch associated case
+    cr = await db.execute(select(Case).where(Case.id == policy.case_id))
+    case = cr.scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Associated case not found")
+        
+    # 3. Fetch customer details
+    customer = await UserRepository(db).get_by_id(policy.customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+        
+    # 4. Generate PDF
+    file_path = PDFGeneratorService.generate_proposal_pdf(case, policy, customer)
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename=f"Proposal_{policy.policy_number}.pdf"
+    )
+

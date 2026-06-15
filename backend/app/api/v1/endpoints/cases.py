@@ -234,3 +234,36 @@ def _s(c: Case) -> dict:
             c.last_activity_at.isoformat() if c.last_activity_at else None
         ),
     }
+
+
+@router.get("/{case_id}/recommendation/download")
+async def download_recommendation_pdf(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    from backend.app.models.all_models import Quote
+    r = await db.execute(select(Case).where(Case.id == case_id))
+    case = r.scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    qr = await db.execute(select(Quote).where(Quote.case_id == case_id).order_by(Quote.ai_rank.asc()))
+    quotes = list(qr.scalars().all())
+    if not quotes:
+        raise HTTPException(status_code=400, detail="No quotes fetched yet for this case")
+        
+    customer = await UserRepository(db).get_by_id(case.customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+        
+    from backend.app.services.document_generator import PDFGeneratorService
+    from fastapi.responses import FileResponse
+    
+    file_path = PDFGeneratorService.generate_recommendation_pdf(case, quotes, customer)
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename=f"Recommendation_{case.case_number}.pdf"
+    )
+
