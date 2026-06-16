@@ -16,7 +16,15 @@ router = APIRouter(prefix="/queries", tags=["queries"])
 @router.get("/mine")
 async def my_queries(db: AsyncSession = Depends(get_db), current_user=Depends(get_current_user)):
     # Return escalations assigned to the current customer's cases and not resolved, with their medical requests
-    r = await db.execute(select(EscalationLog).where(EscalationLog.assigned_to_role == "CUSTOMER", EscalationLog.resolved == 0))
+    r = await db.execute(
+        select(EscalationLog)
+        .join(Case, Case.id == EscalationLog.case_id)
+        .where(
+            EscalationLog.assigned_to_role == "CUSTOMER",
+            EscalationLog.resolved == 0,
+            Case.customer_id == str(current_user.id)
+        )
+    )
     items = r.scalars().all()
     results = []
     for e in items:
@@ -83,6 +91,42 @@ async def reply_query(escalation_id: str, message: str | None = Form(None), file
         db.add(med_req)
         await db.commit()
         await db.refresh(med_req)
+
+    # Save uploaded files if any
+    if files:
+        import os
+        import aiofiles
+        from configs.base import settings
+        
+        upload_dir = settings.FILE_UPLOAD_PATH
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        for file in files:
+            if not file.filename:
+                continue
+            ext = os.path.splitext(file.filename)[1] or ".bin"
+            save_name = f"med_{uuid.uuid4()}{ext}"
+            save_path = os.path.join(upload_dir, save_name)
+            
+            content = await file.read()
+            async with aiofiles.open(save_path, "wb") as out:
+                await out.write(content)
+                
+            doc_type = (med_req.requirements[0] if med_req.requirements else None) or e.reason or "QUERY_RESPONSE"
+            doc = MedicalDocument(
+                id=str(uuid.uuid4()),
+                medical_request_id=med_req.id,
+                customer_id=str(current_user.id),
+                document_type=doc_type,
+                file_name=file.filename,
+                file_path=save_path,
+                file_size=len(content),
+                mime_type=file.content_type,
+            )
+            db.add(doc)
+            
+        med_req.status = "COMPLETED"
+        db.add(med_req)
 
     e.resolved = 1
     e.resolved_at = datetime.utcnow()

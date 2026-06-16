@@ -182,9 +182,16 @@ async def fetch_quotes(
         db.add(obj)
         saved.append(obj)
 
-    await db.execute(
-        update(Case).where(Case.id == case_id).values(current_stage="QUOTE_COMPARISON")
-    )
+    from backend.app.models.all_models import CaseStage
+    stages_list = [s.value for s in CaseStage]
+    current_val = case.current_stage.value if hasattr(case.current_stage, "value") else str(case.current_stage)
+    current_idx = stages_list.index(current_val) if current_val in stages_list else 0
+    target_idx = stages_list.index("QUOTE_COMPARISON")
+
+    if target_idx > current_idx:
+        await db.execute(
+            update(Case).where(Case.id == case_id).values(current_stage="QUOTE_COMPARISON")
+        )
     await db.commit()
 
     banker = await db.get(User, case.banker_id)

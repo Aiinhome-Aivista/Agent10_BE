@@ -87,7 +87,7 @@ async def create_case(
     )
     from backend.app.api.v1.endpoints.workflow import _run_workflow_bg
 
-    background_tasks.add_task(_run_workflow_bg, case.id)
+    await _run_workflow_bg(case.id)
     return {
         "case_id": case.id,
         "case_number": case.case_number,
@@ -105,11 +105,25 @@ async def list_cases(
         if hasattr(current_user.role, "value")
         else current_user.role
     )
-    q = select(Case)
+    from sqlalchemy.orm import selectinload
+    q = select(Case).options(selectinload(Case.medical_requests))
     if role == "BANKER":
         q = q.where(Case.banker_id == str(current_user.id))
     elif role == "CUSTOMER":
         q = q.where(Case.customer_id == str(current_user.id))
+    result = await db.execute(q.order_by(Case.created_at.desc()))
+    cases = result.scalars().all()
+    return {"cases": [_s(c) for c in cases]}
+
+
+@router.get("/customer/{customer_id}")
+async def list_customer_cases(
+    customer_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from sqlalchemy.orm import selectinload
+    q = select(Case).where(Case.customer_id == customer_id).options(selectinload(Case.medical_requests))
     result = await db.execute(q.order_by(Case.created_at.desc()))
     cases = result.scalars().all()
     return {"cases": [_s(c) for c in cases]}
@@ -121,7 +135,8 @@ async def get_case(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    r = await db.execute(select(Case).where(Case.id == case_id))
+    from sqlalchemy.orm import selectinload
+    r = await db.execute(select(Case).where(Case.id == case_id).options(selectinload(Case.medical_requests)))
     c = r.scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Case not found")
@@ -147,7 +162,7 @@ async def banker_approve(
             banker_approved=1,
             banker_remarks=body.remarks,
             banker_approved_at=datetime.utcnow(),
-            current_stage=CaseStage.OTP_CONSENT,
+            current_stage=CaseStage.BANKER_APPROVAL,
         )
     )
     db.add(
@@ -155,7 +170,7 @@ async def banker_approve(
             id=str(uuid.uuid4()),
             case_id=case_id,
             from_stage=str(case.current_stage),
-            to_stage=CaseStage.OTP_CONSENT,
+            to_stage=CaseStage.BANKER_APPROVAL,
             triggered_by=str(current_user.id),
             remarks=body.remarks,
         )
@@ -166,7 +181,7 @@ async def banker_approve(
     if customer:
         subject, body_html = stage_message(
             case.case_number,
-            "OTP_CONSENT",
+            "BANKER_APPROVAL",
             "Your banker approved the recommendation. OTP consent is now required.",
         )
         await queue_and_send_email(
@@ -178,7 +193,7 @@ async def banker_approve(
             reference_type="CASE",
             reference_id=case_id,
         )
-    return {"message": "Case approved", "next_stage": "OTP_CONSENT"}
+    return {"message": "Case approved", "next_stage": "BANKER_APPROVAL"}
 
 
 @router.post("/{case_id}/customer-intake")
@@ -208,7 +223,95 @@ async def customer_intake_update(
     return {"message": "Customer intake saved", "kyc_status": "PROFILE_SUBMITTED"}
 
 
+class UpdateStageRequest(BaseModel):
+    stage: str
+
+
+@router.put("/{case_id}/stage")
+async def update_case_stage(
+    case_id: str,
+    body: UpdateStageRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    r = await db.execute(select(Case).where(Case.id == case_id))
+    case = r.scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if body.stage not in [s.value for s in CaseStage]:
+        raise HTTPException(status_code=400, detail="Invalid stage")
+
+    stages_list = [s.value for s in CaseStage]
+    current_val = case.current_stage.value if hasattr(case.current_stage, 'value') else str(case.current_stage)
+
+    current_idx = stages_list.index(current_val) if current_val in stages_list else 0
+    target_idx = stages_list.index(body.stage)
+
+    if target_idx > current_idx:
+        await db.execute(
+            update(Case)
+            .where(Case.id == case_id)
+            .values(current_stage=body.stage)
+        )
+        db.add(
+            WorkflowStageLog(
+                id=str(uuid.uuid4()),
+                case_id=case_id,
+                from_stage=str(case.current_stage),
+                to_stage=body.stage,
+                triggered_by=str(current_user.id),
+                remarks="Stage updated by user action",
+            )
+        )
+        await db.commit()
+        return {"message": "Stage updated", "current_stage": body.stage}
+    return {"message": "Stage update skipped (already at a later stage)", "current_stage": current_val}
+
+
+@router.post("/{case_id}/banker-reject")
+async def banker_reject(
+    case_id: str,
+    body: BankerApproveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles("BANKER", "SUPER_ADMIN")),
+):
+    r = await db.execute(select(Case).where(Case.id == case_id))
+    case = r.scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    await db.execute(
+        update(Case)
+        .where(Case.id == case_id)
+        .values(
+            status=CaseStatus.CANCELLED,
+            banker_remarks=body.remarks,
+            current_stage=CaseStage.EXCEPTION_HANDLING,
+        )
+    )
+    db.add(
+        WorkflowStageLog(
+            id=str(uuid.uuid4()),
+            case_id=case_id,
+            from_stage=str(case.current_stage),
+            to_stage=CaseStage.EXCEPTION_HANDLING,
+            triggered_by=str(current_user.id),
+            remarks=body.remarks or "Rejected by banker",
+        )
+    )
+    await db.commit()
+    return {"message": "Case rejected"}
+
+
 def _s(c: Case) -> dict:
+    has_med = False
+    if "medical_requests" in c.__dict__:
+        for mr in c.medical_requests:
+            remarks = mr.ops_remarks or ""
+            if remarks not in {"Underwriter raised query", "Customer response to query"}:
+                has_med = True
+                break
     return {
         "id": c.id,
         "case_number": c.case_number,
@@ -228,9 +331,13 @@ def _s(c: Case) -> dict:
         "esign_status": c.esign_status,
         "profile_update_request": c.profile_update_request,
         "banker_approved": bool(c.banker_approved),
+        "banker_remarks": c.banker_remarks,
+        "banker_approved_at": c.banker_approved_at.isoformat() if c.banker_approved_at else None,
         "consent_given": bool(c.consent_given),
+        "consent_given_at": c.consent_given_at.isoformat() if c.consent_given_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "last_activity_at": (
             c.last_activity_at.isoformat() if c.last_activity_at else None
         ),
+        "has_medical_requests": has_med,
     }

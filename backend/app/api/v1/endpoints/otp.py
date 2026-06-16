@@ -185,7 +185,7 @@ async def verify_otp(
             .values(
                 consent_given=1,
                 consent_given_at=datetime.utcnow(),
-                current_stage="PROPOSAL_GENERATION",
+                current_stage="OTP_CONSENT",
                 kyc_status="PENDING_E_SIGN",
                 esign_status="NOT_STARTED",
             )
@@ -195,8 +195,8 @@ async def verify_otp(
         case_number = case.case_number if case else body.case_id
         subject, body_html = stage_message(
             case_number,
-            "PROPOSAL_GENERATION",
-            "Consent verified successfully using the test OTP override. Proposal generation can proceed.",
+            "OTP_CONSENT",
+            "Consent verified successfully using the test OTP override. Proposal review by banker is now pending.",
         )
         await queue_and_send_email(
             db,
@@ -320,7 +320,7 @@ async def verify_otp(
         .values(
             consent_given=1,
             consent_given_at=datetime.utcnow(),
-            current_stage="PROPOSAL_GENERATION",
+            current_stage="OTP_CONSENT",
             kyc_status="PENDING_E_SIGN",
             esign_status="NOT_STARTED",
         )
@@ -330,8 +330,8 @@ async def verify_otp(
     case_number = case.case_number if case else body.case_id
     subject, body_html = stage_message(
         case_number,
-        "PROPOSAL_GENERATION",
-        "Consent verified successfully. Proposal generation can proceed.",
+        "OTP_CONSENT",
+        "Consent verified successfully. Proposal review by banker is now pending.",
     )
     await queue_and_send_email(
         db,

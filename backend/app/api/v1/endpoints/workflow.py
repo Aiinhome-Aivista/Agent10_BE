@@ -79,12 +79,32 @@ async def _record_stage(
 
 
 async def _persist_case_stage(
-    db: AsyncSession, case_id: str, stage, values: dict | None = None
+    db: AsyncSession, case_id: str, stage, values: dict | None = None, update_stage: bool = True
 ):
-    payload = {"current_stage": stage, "stage_entered_at": datetime.utcnow()}
+    r = await db.execute(select(Case).where(Case.id == case_id))
+    case = r.scalar_one_or_none()
+    payload = {}
+    if case:
+        if update_stage:
+            stages_list = [s.value for s in CaseStage]
+            current_val = case.current_stage.value if hasattr(case.current_stage, "value") else str(case.current_stage)
+            stage_val = stage.value if hasattr(stage, "value") else str(stage)
+            
+            current_idx = stages_list.index(current_val) if current_val in stages_list else 0
+            target_idx = stages_list.index(stage_val) if stage_val in stages_list else 0
+            
+            if target_idx >= current_idx:
+                payload["current_stage"] = stage
+                payload["stage_entered_at"] = datetime.utcnow()
+    else:
+        if update_stage:
+            payload["current_stage"] = stage
+            payload["stage_entered_at"] = datetime.utcnow()
+
     if values:
         payload.update(values)
-    await db.execute(update(Case).where(Case.id == case_id).values(**payload))
+    if payload:
+        await db.execute(update(Case).where(Case.id == case_id).values(**payload))
 
 
 async def _save_quotes(db: AsyncSession, case_id: str, quotes: list[dict]):
@@ -237,20 +257,15 @@ async def _run_workflow_bg(case_id: str):
             "error": None,
         }
 
-        previous_stage = case.current_stage
-
         state = await node_needs_analysis(state)
         await _persist_case_stage(
             db,
             case_id,
             CaseStage.NEEDS_ANALYSIS,
             {"needs_analysis": state["needs_analysis"]},
-        )
-        await _record_stage(
-            db, case_id, previous_stage, CaseStage.NEEDS_ANALYSIS, "workflow"
+            update_stage=False,
         )
         await db.commit()
-        previous_stage = CaseStage.NEEDS_ANALYSIS
 
         state = await node_suitability(state)
         await _persist_case_stage(
@@ -258,30 +273,19 @@ async def _run_workflow_bg(case_id: str):
             case_id,
             CaseStage.SUITABILITY_VALIDATION,
             {"suitability_result": state["suitability_result"]},
-        )
-        await _record_stage(
-            db, case_id, previous_stage, CaseStage.SUITABILITY_VALIDATION, "workflow"
+            update_stage=False,
         )
         await db.commit()
-        previous_stage = CaseStage.SUITABILITY_VALIDATION
 
         state = await node_quote_retrieval(state)
         await _save_quotes(db, case_id, state["quotes"])
-        await _persist_case_stage(db, case_id, CaseStage.QUOTE_RETRIEVAL)
-        await _record_stage(
-            db, case_id, previous_stage, CaseStage.QUOTE_RETRIEVAL, "workflow"
-        )
+        await _persist_case_stage(db, case_id, CaseStage.QUOTE_RETRIEVAL, update_stage=False)
         await db.commit()
-        previous_stage = CaseStage.QUOTE_RETRIEVAL
 
         state = await node_comparison(state)
         await _update_quotes_with_comparison(db, case_id, state["comparison"])
-        await _persist_case_stage(db, case_id, CaseStage.QUOTE_COMPARISON)
-        await _record_stage(
-            db, case_id, previous_stage, CaseStage.QUOTE_COMPARISON, "workflow"
-        )
+        await _persist_case_stage(db, case_id, CaseStage.QUOTE_COMPARISON, update_stage=False)
         await db.commit()
-        previous_stage = CaseStage.QUOTE_COMPARISON
 
         state = await node_recommendation(state)
         await _persist_case_stage(
@@ -289,9 +293,7 @@ async def _run_workflow_bg(case_id: str):
             case_id,
             CaseStage.RECOMMENDATION,
             {"recommendation": state["recommendation"]},
-        )
-        await _record_stage(
-            db, case_id, previous_stage, CaseStage.RECOMMENDATION, "workflow"
+            update_stage=True,
         )
         await db.commit()
 
@@ -312,22 +314,15 @@ async def _run_workflow_bg(case_id: str):
                 reference_id=case_id,
             )
 
-        await _persist_case_stage(db, case_id, CaseStage.BANKER_APPROVAL)
-        await _record_stage(
-            db, case_id, CaseStage.RECOMMENDATION, CaseStage.BANKER_APPROVAL, "workflow"
-        )
-        await db.commit()
-
 
 @router.post("/case/{case_id}/run")
 async def trigger_workflow(
     case_id: str,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_roles("BANKER", "SUPER_ADMIN")),
 ):
     r = await db.execute(select(Case).where(Case.id == case_id))
     if not r.scalar_one_or_none():
         raise HTTPException(404, "Case not found")
-    background_tasks.add_task(_run_workflow_bg, case_id)
+    await _run_workflow_bg(case_id)
     return {"message": "Workflow triggered", "case_id": case_id}
