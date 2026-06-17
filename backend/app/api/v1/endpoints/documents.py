@@ -55,7 +55,7 @@ async def upload_document(
     doc = MedicalDocument(
         id=str(uuid.uuid4()),
         medical_request_id=medical_request_id,
-        customer_id=str(current_user.id),
+        customer_id=med_req.customer_id,
         document_type=document_type,
         file_name=file.filename or save_name,
         file_path=save_path,

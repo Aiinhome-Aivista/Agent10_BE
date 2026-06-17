@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 
 from backend.app.core.database import get_db
 from backend.app.core.security import get_current_user, require_roles
-from backend.app.models.all_models import MedicalRequest, MedicalDocument, User, Case, CaseStage
+from backend.app.models.all_models import MedicalRequest, MedicalDocument, User, Case, CaseStage, UserRole
 from configs.base import settings
 
 router = APIRouter(prefix="/medical", tags=["medical"])
@@ -112,6 +112,11 @@ async def create_customer_medical_req(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if current_user.role == UserRole.CUSTOMER:
+        raise HTTPException(
+            status_code=403,
+            detail="Customers are not allowed to initiate medical document requests. Only underwriters can initiate them."
+        )
     req = MedicalRequest(
         id=str(uuid.uuid4()),
         case_id=body.case_id,
@@ -264,6 +269,13 @@ async def upload_medical_doc(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    mr_result = await db.execute(
+        select(MedicalRequest).where(MedicalRequest.id == medical_request_id)
+    )
+    med_req = mr_result.scalar_one_or_none()
+    if not med_req:
+        raise HTTPException(status_code=404, detail="Medical request not found")
+
     upload_dir = os.path.abspath(settings.FILE_UPLOAD_PATH)
     logger.info("Saving uploaded file to dir: %s", upload_dir)
     os.makedirs(upload_dir, exist_ok=True)
@@ -277,7 +289,7 @@ async def upload_medical_doc(
     doc = MedicalDocument(
         id=doc_id,
         medical_request_id=medical_request_id,
-        customer_id=str(current_user.id),
+        customer_id=med_req.customer_id,
         document_type=document_type,
         file_name=file.filename,
         file_path=save_path,
