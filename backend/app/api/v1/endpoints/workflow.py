@@ -239,7 +239,7 @@ async def _run_workflow_bg(case_id: str):
         profile = case.customer_profile or {}
         profile["sum_assured"] = case.sum_assured or profile.get("sum_assured") or 1000000
         profile["premium_budget"] = case.premium_budget or profile.get("premium_budget") or 50000
-        profile["policy_tenure"] = case.policy_tenure or profile.get("policy_tenure") or 20
+        profile["policy_tenure"] = case.policy_tenure or profile.get("policy_tenure") or 1
 
         state: WorkflowState = {
             "case_id": case_id,

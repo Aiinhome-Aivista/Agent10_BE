@@ -94,7 +94,7 @@ async def fetch_quotes(
         {
             "sum_assured": case.sum_assured or 1_000_000,
             "premium_budget": case.premium_budget or 50_000,
-            "policy_tenure": case.policy_tenure or 20,
+            "policy_tenure": case.policy_tenure or 1,
             "customer_profile": case.customer_profile or {},
             "insurers": list(set(insurers_in_kb)),
         }

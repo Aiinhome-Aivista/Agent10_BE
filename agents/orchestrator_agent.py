@@ -96,7 +96,7 @@ async def node_quote_retrieval(state: WorkflowState) -> WorkflowState:
     payload = {
         "sum_assured":    state["customer_profile"].get("sum_assured", 1000000),
         "premium_budget": state["customer_profile"].get("premium_budget", 50000),
-        "policy_tenure":  state["customer_profile"].get("policy_tenure", 20),
+        "policy_tenure":  state["customer_profile"].get("policy_tenure") or 1,
         "customer_profile": state["customer_profile"],
         "insurers": list(set(insurers_in_kb)),
     }

@@ -53,7 +53,7 @@ async def fetch_all_quotes(payload: dict) -> List[dict]:
     """
     profile = payload.get("customer_profile", {})
     sum_assured = payload.get("sum_assured", 1000000)
-    policy_tenure = payload.get("policy_tenure", 20)
+    policy_tenure = payload.get("policy_tenure", 1)
     insurers_list = payload.get("insurers", ["HDFC_LIFE", "LIC", "ICICI_PRU", "SBI_GENERAL"])
 
     # 1. Retrieve context from ChromaDB
@@ -139,8 +139,21 @@ Respond ONLY with valid JSON (no markdown formatting, no extra explanation text)
                 quotes = []
                 for q in parsed:
                     normalized_q = normalize(q)
-                    # Filter to keep only requested insurers
                     if normalized_q["insurer_code"] in insurers_list:
+                        # Apply multi-year premium discount
+                        tenure = int(policy_tenure or 1)
+                        discount = 1.0
+                        if tenure == 2:
+                            discount = 0.95
+                        elif tenure == 3:
+                            discount = 0.90
+                        elif tenure == 4:
+                            discount = 0.88
+                        elif tenure >= 5:
+                            discount = 0.85
+                        
+                        normalized_q["policy_tenure"] = tenure
+                        normalized_q["annual_premium"] = round(normalized_q["annual_premium"] * discount, 2)
                         quotes.append(normalized_q)
                 if quotes:
                     quotes.sort(key=lambda x: x["score"], reverse=True)
