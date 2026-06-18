@@ -90,7 +90,7 @@ async def node_quote_retrieval(state: WorkflowState) -> WorkflowState:
     except Exception:
         pass
         
-    if not insurers_in_kb and not docs_exist:
+    if not insurers_in_kb:
         insurers_in_kb = ["HDFC_LIFE", "LIC", "ICICI_PRU"]
 
     payload = {
@@ -127,7 +127,8 @@ async def node_comparison(state: WorkflowState) -> WorkflowState:
 # ─── Node: Recommendation ────────────────────────────────────────────
 
 async def node_recommendation(state: WorkflowState) -> WorkflowState:
-    top = state["comparison"].get("ranked_quotes", [{}])[0]
+    ranked = state["comparison"].get("ranked_quotes", [])
+    top = ranked[0] if ranked else {}
     return {
         **state,
         "recommendation": {

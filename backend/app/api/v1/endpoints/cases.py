@@ -87,7 +87,7 @@ async def create_case(
     )
     from backend.app.api.v1.endpoints.workflow import _run_workflow_bg
 
-    await _run_workflow_bg(case.id)
+    background_tasks.add_task(_run_workflow_bg, case.id)
     return {
         "case_id": case.id,
         "case_number": case.case_number,

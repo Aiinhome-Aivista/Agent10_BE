@@ -230,6 +230,7 @@ async def _update_quotes_with_comparison(db: AsyncSession, case_id: str, compari
 async def _run_workflow_bg(case_id: str):
     from backend.app.core.database import AsyncSessionLocal
 
+    # 1. Fetch case details and initial profile
     async with AsyncSessionLocal() as db:
         r = await db.execute(select(Case).where(Case.id == case_id))
         case = r.scalar_one_or_none()
@@ -240,24 +241,29 @@ async def _run_workflow_bg(case_id: str):
         profile["sum_assured"] = case.sum_assured or profile.get("sum_assured") or 1000000
         profile["premium_budget"] = case.premium_budget or profile.get("premium_budget") or 50000
         profile["policy_tenure"] = case.policy_tenure or profile.get("policy_tenure") or 20
+        banker_id = case.banker_id
+        case_number = case.case_number
+        current_stage = case.current_stage
 
-        state: WorkflowState = {
-            "case_id": case_id,
-            "customer_profile": profile,
-            "needs_analysis": {},
-            "suitability_result": {},
-            "quotes": [],
-            "comparison": {},
-            "recommendation": {},
-            "banker_approved": False,
-            "proposal": {},
-            "exceptions": [],
-            "stage": str(case.current_stage),
-            "llm_context": [],
-            "error": None,
-        }
+    state: WorkflowState = {
+        "case_id": case_id,
+        "customer_profile": profile,
+        "needs_analysis": {},
+        "suitability_result": {},
+        "quotes": [],
+        "comparison": {},
+        "recommendation": {},
+        "banker_approved": False,
+        "proposal": {},
+        "exceptions": [],
+        "stage": str(current_stage),
+        "llm_context": [],
+        "error": None,
+    }
 
-        state = await node_needs_analysis(state)
+    # 2. Needs Analysis (LLM call - NO DB session open)
+    state = await node_needs_analysis(state)
+    async with AsyncSessionLocal() as db:
         await _persist_case_stage(
             db,
             case_id,
@@ -267,7 +273,9 @@ async def _run_workflow_bg(case_id: str):
         )
         await db.commit()
 
-        state = await node_suitability(state)
+    # 3. Suitability Validation (LLM call - NO DB session open)
+    state = await node_suitability(state)
+    async with AsyncSessionLocal() as db:
         await _persist_case_stage(
             db,
             case_id,
@@ -277,17 +285,23 @@ async def _run_workflow_bg(case_id: str):
         )
         await db.commit()
 
-        state = await node_quote_retrieval(state)
+    # 4. Quote Retrieval (Insurers API fetch - NO DB session open)
+    state = await node_quote_retrieval(state)
+    async with AsyncSessionLocal() as db:
         await _save_quotes(db, case_id, state["quotes"])
         await _persist_case_stage(db, case_id, CaseStage.QUOTE_RETRIEVAL, update_stage=False)
         await db.commit()
 
-        state = await node_comparison(state)
+    # 5. Quote Comparison (LLM call - NO DB session open)
+    state = await node_comparison(state)
+    async with AsyncSessionLocal() as db:
         await _update_quotes_with_comparison(db, case_id, state["comparison"])
         await _persist_case_stage(db, case_id, CaseStage.QUOTE_COMPARISON, update_stage=False)
         await db.commit()
 
-        state = await node_recommendation(state)
+    # 6. Recommendation (LLM call - NO DB session open)
+    state = await node_recommendation(state)
+    async with AsyncSessionLocal() as db:
         await _persist_case_stage(
             db,
             case_id,
@@ -297,10 +311,10 @@ async def _run_workflow_bg(case_id: str):
         )
         await db.commit()
 
-        banker = await UserRepository(db).get_by_id(case.banker_id)
+        banker = await UserRepository(db).get_by_id(banker_id)
         if banker:
             subject, body = stage_message(
-                case.case_number,
+                case_number,
                 "BANKER_APPROVAL",
                 "The recommendation is ready. Please review and approve to continue.",
             )
@@ -318,11 +332,12 @@ async def _run_workflow_bg(case_id: str):
 @router.post("/case/{case_id}/run")
 async def trigger_workflow(
     case_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_roles("BANKER", "SUPER_ADMIN")),
 ):
     r = await db.execute(select(Case).where(Case.id == case_id))
     if not r.scalar_one_or_none():
         raise HTTPException(404, "Case not found")
-    await _run_workflow_bg(case_id)
+    background_tasks.add_task(_run_workflow_bg, case_id)
     return {"message": "Workflow triggered", "case_id": case_id}
