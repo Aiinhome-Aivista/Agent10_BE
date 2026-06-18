@@ -12,8 +12,7 @@ from sqlalchemy import select
 from configs.base import settings
 from backend.app.core.database import get_db
 from backend.app.core.security import get_current_user, require_roles
-from backend.app.models.user import User, UserRole
-from backend.app.models.all_models import MedicalDocument, MedicalRequest
+from backend.app.models.all_models import User, UserRole, MedicalDocument, MedicalRequest
 from fastapi import Header
 from typing import Optional
 from fastapi.responses import FileResponse

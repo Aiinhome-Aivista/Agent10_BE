@@ -50,17 +50,27 @@ async def create_case(
     body: CreateCaseRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles("BANKER", "SUPER_ADMIN")),
+    current_user: User = Depends(require_roles("BANKER", "CUSTOMER", "SUPER_ADMIN")),
 ):
-    customer = await UserRepository(db).get_by_id(body.customer_id)
+    role_val = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    if role_val == "CUSTOMER":
+        r_banker = await db.execute(select(User).where(User.role == UserRole.BANKER))
+        banker = r_banker.scalars().first()
+        banker_id = banker.id if banker else str(current_user.id)
+        customer_id = str(current_user.id)
+    else:
+        banker_id = str(current_user.id)
+        customer_id = body.customer_id
+
+    customer = await UserRepository(db).get_by_id(customer_id)
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
     case = Case(
         id=str(uuid.uuid4()),
         case_number=f"CASE-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:6].upper()}",
-        customer_id=body.customer_id,
-        banker_id=str(current_user.id),
+        customer_id=customer_id,
+        banker_id=banker_id,
         customer_profile=body.customer_profile,
         sum_assured=body.sum_assured,
         premium_budget=body.premium_budget,

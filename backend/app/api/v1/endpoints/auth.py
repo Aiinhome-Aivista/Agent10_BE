@@ -21,7 +21,7 @@ DEFAULT_CSV_CUSTOMER_PASSWORD = "852456"
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str  # Can be email or phone number
     password: str
 
 
@@ -40,9 +40,10 @@ class RefreshRequest(BaseModel):
 @router.post("/login")
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     repo = UserRepository(db)
+    input_str = body.email.strip()
     try:
         user = await asyncio.wait_for(
-            repo.get_by_email(body.email.strip().lower()), timeout=8
+            repo.get_by_email(input_str.lower()), timeout=8
         )
     except asyncio.TimeoutError:
         raise HTTPException(
@@ -54,6 +55,16 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
             status_code=503,
             detail="Authentication service unavailable (database issue)",
         )
+
+    if not user:
+        # Fallback: check if it's a phone number
+        try:
+            user = await asyncio.wait_for(
+                repo.get_by_phone(input_str), timeout=8
+            )
+        except Exception:
+            pass
+
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 

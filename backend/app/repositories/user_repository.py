@@ -12,6 +12,11 @@ class UserRepository:
         r = await self.db.execute(select(User).where(User.email == normalized))
         return r.scalar_one_or_none()
 
+    async def get_by_phone(self, phone: str):
+        normalized = (phone or "").strip()
+        r = await self.db.execute(select(User).where(User.phone == normalized))
+        return r.scalar_one_or_none()
+
     async def get_by_id(self, user_id: str):
         r = await self.db.execute(select(User).where(User.id == user_id))
         return r.scalar_one_or_none()

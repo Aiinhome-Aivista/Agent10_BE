@@ -245,6 +245,21 @@ async def get_kb_context_for_customer(customer_profile: dict, needs_analysis: di
     Build queries and retrieve relevant policy information and rider details
     from the knowledge base (ChromaDB) specifically matching the customer's profile.
     """
+    # Extract onboarding popup fields
+    age = customer_profile.get("age") or customer_profile.get("date_of_birth") or ""
+    income = customer_profile.get("annual_income") or customer_profile.get("income") or ""
+    chronic = customer_profile.get("chronic_illness") or "No"
+    
+    intent_list = customer_profile.get("protection_intent", [])
+    if isinstance(intent_list, list):
+        intent_str = ", ".join([str(x) for x in intent_list])
+    elif intent_list:
+        intent_str = str(intent_list)
+    else:
+        intent_str = ""
+        
+    purpose = needs_analysis.get("purpose") or ""
+
     # Safe extraction of lists/fields
     goals = customer_profile.get("financial_goals", [])
     if isinstance(goals, list):
@@ -263,13 +278,12 @@ async def get_kb_context_for_customer(customer_profile: dict, needs_analysis: di
         needs_str = ""
 
     coverage_type = needs_analysis.get("recommended_coverage_type") or "TERM"
-    age = customer_profile.get("age") or customer_profile.get("date_of_birth") or ""
     dependents = customer_profile.get("dependents") or "0"
     risk_appetite = customer_profile.get("risk_appetite") or ""
 
-    # Build two search queries to cover both general features and riders
-    q1 = f"{coverage_type} insurance coverage options, eligibility, rules, and suitability for age {age}, risk {risk_appetite}, goals: {goals_str}, needs: {needs_str}"
-    q2 = f"policy riders, add-ons, accidental death cover, critical illness benefit, premium waiver rules and benefits for {coverage_type} insurance with {dependents} dependents"
+    # Build two search queries combining the popup fields and traditional fields
+    q1 = f"{coverage_type} insurance coverage options, eligibility, rules, and suitability for age {age}, income {income}, pre-existing chronic illness: {chronic}, risk {risk_appetite}, goals: {goals_str}, needs: {needs_str}, purpose: {purpose}"
+    q2 = f"policy riders, add-ons, accidental death cover, critical illness benefit, waiting periods and underwriting exclusions for {intent_str} insurance with {dependents} dependents"
 
     try:
         chunks1 = await semantic_search(q1, top_k=3)
