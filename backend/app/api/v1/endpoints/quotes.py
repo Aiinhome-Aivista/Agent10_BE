@@ -30,17 +30,7 @@ def is_insurer_match(code1: str, code2: str) -> bool:
         return False
     c1 = code1.upper().replace("_", "").replace(" ", "")
     c2 = code2.upper().replace("_", "").replace(" ", "")
-    if c1 == c2:
-        return True
-    if "SBI" in c1 and "SBI" in c2:
-        return True
-    if "HDFC" in c1 and "HDFC" in c2:
-        return True
-    if "ICICI" in c1 and "ICICI" in c2:
-        return True
-    if "LIC" in c1 and "LIC" in c2:
-        return True
-    return False
+    return c1 == c2 or c1 in c2 or c2 in c1
 
 
 def get_rider_cost_info(rider_name: str, available_riders: list) -> str:
@@ -70,25 +60,17 @@ async def fetch_quotes(
     if not case:
         raise HTTPException(404, "Case not found")
 
-    # Find which insurers are present in document titles
+    # Find which insurers are present in document titles dynamically
     r_docs = await db.execute(select(KnowledgeDocument).where(KnowledgeDocument.status == 'INDEXED'))
     docs = r_docs.scalars().all()
-    docs_exist = len(docs) > 0
     insurers_in_kb = []
     import re
     for d in docs:
-        title_lower = d.title.lower()
-        if re.search(r'\bsbi\b', title_lower):
-            insurers_in_kb.append("SBI_GENERAL")
-        if re.search(r'\bhdfc\b', title_lower):
-            insurers_in_kb.append("HDFC_LIFE")
-        if re.search(r'\blic\b', title_lower):
-            insurers_in_kb.append("LIC")
-        if re.search(r'\bicici\b', title_lower):
-            insurers_in_kb.append("ICICI_PRU")
-
-    if not insurers_in_kb and not docs_exist:
-        insurers_in_kb = ["HDFC_LIFE", "LIC", "ICICI_PRU"]
+        words = [w.upper() for w in re.findall(r'[a-zA-Z]+', d.title)]
+        if len(words) >= 2 and words[0] in ["SBI", "HDFC", "ICICI", "LIC", "NIVA", "MAX", "ADITYA", "ACTIV", "RELIANCE", "TATA", "BAJAJ", "KOTAK"]:
+            insurers_in_kb.append(f"{words[0]}_{words[1]}")
+        elif words:
+            insurers_in_kb.append(words[0])
 
     raw_quotes = await fetch_all_quotes(
         {

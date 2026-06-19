@@ -29,25 +29,16 @@ def normalize(raw: dict) -> dict:
     # Extract Policy Bazaar key features dynamically from LLM/RAG response
     cashless = cov.get("cashless_hospitals") or cov.get("cashless")
     if not cashless:
-        code = raw.get("insurer_code", "").upper()
-        if "HDFC" in code:
-            cashless = "12,000+ Cashless Hospitals"
-        elif "SBI" in code:
-            cashless = "9,500+ Cashless Hospitals"
-        elif "ICICI" in code:
-            cashless = "10,000+ Cashless Hospitals"
-        elif "LIC" in code:
-            cashless = "8,000+ Cashless Hospitals"
-        else:
-            cashless = "8,500+ Cashless Hospitals"
+        # Fully dynamic - no static hardcoded names
+        cashless = "Refer to policy wording"
             
     room_rent = cov.get("room_rent_limit") or cov.get("room_rent")
     if not room_rent:
-        room_rent = "No Room Rent Capping"
+        room_rent = "Refer to policy wording"
         
     restoration = cov.get("restoration_benefit") or cov.get("restoration")
     if not restoration:
-        restoration = "100% Restoration of cover"
+        restoration = "Refer to policy wording"
 
     waiting_period_days = (raw.get("waiting_period") or {}).get("life_cover_waiting_days") or raw.get("waiting_period_days") or raw.get("waiting_period_in_days")
     try:
@@ -66,7 +57,7 @@ def normalize(raw: dict) -> dict:
     cov["waiting_period_desc"] = waiting_desc
 
     return {
-        "insurer_code":              raw.get("insurer_code", "UNKNOWN"),
+        "insurer_code":              raw.get("insurer_code", "UNKNOWN").upper(),
         "insurer_name":              raw.get("insurer_name", "Unknown"),
         "product_name":              raw.get("product_name") or raw.get("plan_name", ""),
         "product_code":              raw.get("product_code") or raw.get("product_id", ""),
@@ -95,10 +86,10 @@ async def fetch_all_quotes(payload: dict) -> List[dict]:
     profile = payload.get("customer_profile", {})
     sum_assured = payload.get("sum_assured", 1000000)
     policy_tenure = payload.get("policy_tenure", 1)
-    insurers_list = payload.get("insurers", ["HDFC_LIFE", "LIC", "ICICI_PRU", "SBI_GENERAL"])
+    insurers_list = payload.get("insurers", [])
 
     # 1. Retrieve context from ChromaDB
-    query = "health life insurance policy plan benefits premiums rates rules exclusions riders HDFC LIC ICICI SBI"
+    query = "health life insurance policy plan benefits premiums rates rules exclusions riders"
     kb_context = ""
     try:
         chunks = await semantic_search(query, top_k=6)
@@ -131,12 +122,12 @@ RETRIEVED PRODUCT KNOWLEDGE BASE CONTEXT:
 {kb_context if kb_context else "No document chunks retrieved. Please generate standard, realistic policy offers based on standard industry rules."}
 
 Instructions:
-1. Examine the retrieved context. Extract details for the insurers listed: {", ".join(insurers_list)}.
+1. Examine the retrieved context. Identify all the different insurance companies and their specific products described in the brochures.
 2. Premiums must be calculated realistically:
    - Life term insurance premiums are typically ~0.3% to 1.2% of the Sum Assured per year (highly dependent on age and smoker status, where smokers pay 40-70% more, and older age increases premium).
    - Health insurance premiums are typically ~1% to 3% of the Sum Assured per year (highly dependent on age and family size/dependents).
    - Compute the premiums dynamically matching these variables. Do NOT return hardcoded static values.
-3. For each eligible product, return a detailed quote object. 
+3. For each eligible product, return a detailed quote object.
 4. Crucial: Extract Policy Bazaar-like details from the documents for "coverage_details":
    - "cashless_hospitals": The size or presence of the cashless network (e.g. "12,000+ Cashless Hospitals" or "10,000+ Network Hospitals").
    - "room_rent_limit": Capping on room rent (e.g. "No Room Rent Capping", "Single Private Room cap", or "1% of Sum Assured").
@@ -147,7 +138,7 @@ Instructions:
 Return a valid JSON list of quotes matching the schema below:
 [
   {{
-    "insurer_code": "HDFC_LIFE" | "LIC" | "ICICI_PRU" | "SBI_GENERAL",
+    "insurer_code": "string (a clean uppercase slug of the insurer name, e.g. HDFC_LIFE, LIC, ICICI_PRU, SBI_GENERAL, ADITYA_BIRLA, NIVA_BUPA)",
     "insurer_name": "string",
     "product_name": "string",
     "product_code": "string",
@@ -188,7 +179,9 @@ Respond ONLY with valid JSON (no markdown formatting, no extra explanation text)
             quotes = []
             for q in parsed:
                 normalized_q = normalize(q)
-                if normalized_q["insurer_code"] in insurers_list:
+                code = normalized_q["insurer_code"]
+                # Match against list if insurers_list is provided, else allow all
+                if not insurers_list or code in insurers_list or any(x in code for x in insurers_list):
                     # Apply multi-year premium discount
                     tenure = int(policy_tenure or 1)
                     discount = 1.0
