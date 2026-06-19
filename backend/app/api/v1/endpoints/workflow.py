@@ -13,6 +13,7 @@ from backend.app.models.all_models import Case, CaseStage, Quote, WorkflowStageL
 from backend.app.repositories.user_repository import UserRepository
 from backend.app.services.notification_service import (
     queue_and_send_email,
+    create_in_app_notification,
     stage_message,
 )
 from agents.orchestrator_agent import (
@@ -311,6 +312,14 @@ async def _run_workflow_bg(case_id: str):
                 body,
                 recipient_id=banker.id,
                 reference_type="CASE",
+                reference_id=case_id,
+            )
+            await create_in_app_notification(
+                db,
+                recipient_id=banker.id,
+                recipient_email=banker.email,
+                subject="AI Insurance Quotes Ready",
+                body=f"AI comparison is complete for Case {case.case_number}. Please review the recommended quotes.",
                 reference_id=case_id,
             )
 

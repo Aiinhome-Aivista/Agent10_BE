@@ -104,6 +104,32 @@ async def issue_policy(
     db.add(policy)
     await db.commit()
     await db.refresh(policy)
+
+    # Notify Customer & Banker
+    from backend.app.services.notification_service import create_in_app_notification
+    customer_res = await db.execute(select(User).where(User.id == policy.customer_id))
+    customer = customer_res.scalar_one_or_none()
+    if customer:
+        await create_in_app_notification(
+            db,
+            recipient_id=customer.id,
+            recipient_email=customer.email,
+            subject="Policy Issued Successfully!",
+            body=f"Your insurance policy {policy.policy_number} has been issued successfully for Case {case.case_number}. You can now view it on your dashboard.",
+            reference_id=case.id,
+        )
+
+    banker_res = await db.execute(select(User).where(User.id == case.banker_id))
+    banker = banker_res.scalar_one_or_none()
+    if banker:
+        await create_in_app_notification(
+            db,
+            recipient_id=banker.id,
+            recipient_email=banker.email,
+            subject="Policy Issued Successfully",
+            body=f"Policy {policy.policy_number} has been successfully issued for Case {case.case_number}.",
+            reference_id=case.id,
+        )
     
     return {
         "message": "Policy issued successfully",

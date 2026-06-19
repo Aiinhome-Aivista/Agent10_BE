@@ -228,6 +228,32 @@ async def mock_esign(
         )
     )
     await db.commit()
+
+    # Notify Underwriters & Banker
+    from backend.app.services.notification_service import create_in_app_notification
+    uw_res = await db.execute(select(User).where(User.role == "UNDERWRITER"))
+    for uw in uw_res.scalars().all():
+        await create_in_app_notification(
+            db,
+            recipient_id=uw.id,
+            recipient_email=uw.email,
+            subject="KYC & Medical Documents Uploaded",
+            body=f"Customer has uploaded documents and completed e-Signature for Case {case.case_number}. Ready for underwriting review.",
+            reference_id=case.id,
+        )
+    
+    banker_res = await db.execute(select(User).where(User.id == case.banker_id))
+    banker = banker_res.scalar_one_or_none()
+    if banker:
+        await create_in_app_notification(
+            db,
+            recipient_id=banker.id,
+            recipient_email=banker.email,
+            subject="Customer Completed eSign",
+            body=f"Customer has uploaded KYC & Medical documents and completed e-Signature for Case {case.case_number}.",
+            reference_id=case.id,
+        )
+
     logger.info("Customer %s completed eSign for case %s, medical_request %s", current_user.id, body.case_id, med_req.id)
     return {"message": "eSign completed", "status": "COMPLETED", "medical_request_id": med_req.id}
 

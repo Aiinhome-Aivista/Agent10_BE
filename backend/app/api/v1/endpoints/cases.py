@@ -21,6 +21,7 @@ from backend.app.models.all_models import (
 from backend.app.repositories.user_repository import UserRepository
 from backend.app.services.notification_service import (
     queue_and_send_email,
+    create_in_app_notification,
     stage_message,
 )
 
@@ -349,6 +350,22 @@ async def create_case(
         reference_type="CASE",
         reference_id=case.id,
     )
+    await create_in_app_notification(
+        db,
+        recipient_id=customer.id,
+        recipient_email=customer.email,
+        subject="New Insurance Case Created",
+        body=f"A new insurance case {case.case_number} has been created for you by Banker {current_user.name}. Please complete needs analysis or view details.",
+        reference_id=case.id,
+    )
+    await create_in_app_notification(
+        db,
+        recipient_id=str(current_user.id),
+        recipient_email=current_user.email,
+        subject="Insurance Case Created Successfully",
+        body=f"Case {case.case_number} has been successfully created for customer {customer.name}.",
+        reference_id=case.id,
+    )
     from backend.app.api.v1.endpoints.workflow import _run_workflow_bg
 
     await _run_workflow_bg(case.id)
@@ -455,6 +472,14 @@ async def banker_approve(
             body_html,
             recipient_id=customer.id,
             reference_type="CASE",
+            reference_id=case_id,
+        )
+        await create_in_app_notification(
+            db,
+            recipient_id=customer.id,
+            recipient_email=customer.email,
+            subject="Quote Recommendation Approved by Banker",
+            body=f"Your banker {current_user.name} has approved the quote recommendation for Case {case.case_number}. Please select your preferred quote and provide OTP consent.",
             reference_id=case_id,
         )
     return {"message": "Case approved", "next_stage": "BANKER_APPROVAL"}

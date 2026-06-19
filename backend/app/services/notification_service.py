@@ -24,6 +24,9 @@ async def _deliver_notification(notification_id: str) -> None:
         if not notification:
             return
 
+        if notification.notification_type == "IN_APP":
+            return
+
         try:
             sent = await smtp_service.send(
                 notification.recipient_email, notification.subject, notification.body
@@ -79,6 +82,29 @@ async def queue_and_send_email(
 
     asyncio.create_task(_deliver_notification(log.id))
     return log
+
+
+async def create_in_app_notification(
+    db: AsyncSession,
+    recipient_id: str,
+    recipient_email: str,
+    subject: str,
+    body: str,
+    *,
+    reference_type: Optional[str] = "CASE",
+    reference_id: Optional[str] = None,
+) -> NotificationLog:
+    """Helper to queue and persist an in-app notification in PENDING state."""
+    return await queue_and_send_email(
+        db,
+        recipient_email=recipient_email,
+        subject=subject,
+        body=body,
+        recipient_id=recipient_id,
+        reference_type=reference_type,
+        reference_id=reference_id,
+        notification_type="IN_APP",
+    )
 
 
 async def queue_and_send_email_batch(

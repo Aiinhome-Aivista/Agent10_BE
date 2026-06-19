@@ -89,6 +89,8 @@ async def uw_decision(body: UWDecisionBody, db: AsyncSession = Depends(get_db),
             data["status"] = "APPROVED"
         await db.execute(update(Policy).where(Policy.id == p.id).values(**data))
 
+    from backend.app.services.notification_service import create_in_app_notification
+
     # If underwriter raised a query, create an escalation log and a medical request
     if body.decision == "QUERY":
         db.add(
@@ -122,4 +124,48 @@ async def uw_decision(body: UWDecisionBody, db: AsyncSession = Depends(get_db),
 
     await db.execute(update(Case).where(Case.id == case.id).values(current_stage=stage))
     await db.commit()
+
+    # Retrieve customer & banker details to notify
+    customer_res = await db.execute(select(User).where(User.id == case.customer_id))
+    customer = customer_res.scalar_one_or_none()
+    banker_res = await db.execute(select(User).where(User.id == case.banker_id))
+    banker = banker_res.scalar_one_or_none()
+
+    if body.decision == "QUERY" and customer:
+        await create_in_app_notification(
+            db,
+            recipient_id=customer.id,
+            recipient_email=customer.email,
+            subject="KYC & Medical Documents Required",
+            body=f"Underwriter has requested additional documents or information for Case {case.case_number}: {body.remarks or 'Please upload requested documents.'}",
+            reference_id=case.id,
+        )
+        if banker:
+            await create_in_app_notification(
+                db,
+                recipient_id=banker.id,
+                recipient_email=banker.email,
+                subject="Underwriter Raised Query",
+                body=f"Underwriter has raised a query or requested documents for Case {case.case_number}.",
+                reference_id=case.id,
+            )
+    elif body.decision == "APPROVED" and banker:
+        await create_in_app_notification(
+            db,
+            recipient_id=banker.id,
+            recipient_email=banker.email,
+            subject="Underwriting Approved",
+            body=f"Underwriting has been approved for Case {case.case_number}. Ready for policy issuance.",
+            reference_id=case.id,
+        )
+        if customer:
+            await create_in_app_notification(
+                db,
+                recipient_id=customer.id,
+                recipient_email=customer.email,
+                subject="Underwriting Approved",
+                body=f"Your underwriting review has been approved for Case {case.case_number}. Ready for policy issuance.",
+                reference_id=case.id,
+            )
+
     return {"message": f"UW decision recorded: {body.decision}"}

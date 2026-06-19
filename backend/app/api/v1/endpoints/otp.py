@@ -11,6 +11,7 @@ from backend.app.models.all_models import OTPRecord, ConsentRecord, Case, User, 
 from backend.app.repositories.quote_policy_otp_repository import NotificationRepository
 from backend.app.services.notification_service import (
     queue_and_send_email,
+    create_in_app_notification,
     stage_message,
 )
 from smtp.smtp_service import smtp_service
@@ -66,8 +67,18 @@ async def send_otp(
     # Get case number for email
     r = await db.execute(select(Case).where(Case.id == body.case_id))
     case = r.scalar_one_or_none()
-    case_number = case.case_number if case else body.case_id
+    if not case:
+        raise HTTPException(404, "Case not found")
 
+    allowed_stages = {
+        "BANKER_APPROVAL", "OTP_CONSENT", "PROPOSAL_GENERATION",
+        "MEDICAL_COORDINATION", "UNDERWRITING", "POLICY_ISSUANCE", "COMPLETED"
+    }
+    stage_val = case.current_stage.value if hasattr(case.current_stage, "value") else str(case.current_stage)
+    if stage_val not in allowed_stages:
+        raise HTTPException(400, "Consent can only be provided after Banker approval.")
+
+    case_number = case.case_number
     await smtp_service.send_otp(current_user.email, otp_code, case_number)
     notification_repo = NotificationRepository(db)
     await notification_repo.create(
@@ -108,6 +119,16 @@ async def verify_otp(
 
     case_result = await db.execute(select(Case).where(Case.id == body.case_id))
     case = case_result.scalar_one_or_none()
+    if not case:
+        raise HTTPException(404, "Case not found")
+
+    allowed_stages = {
+        "BANKER_APPROVAL", "OTP_CONSENT", "PROPOSAL_GENERATION",
+        "MEDICAL_COORDINATION", "UNDERWRITING", "POLICY_ISSUANCE", "COMPLETED"
+    }
+    stage_val = case.current_stage.value if hasattr(case.current_stage, "value") else str(case.current_stage)
+    if stage_val not in allowed_stages:
+        raise HTTPException(400, "Consent can only be provided after Banker approval.")
 
     is_test_override = body.otp_code == "123456"
 
@@ -193,10 +214,35 @@ async def verify_otp(
         await db.commit()
 
         case_number = case.case_number if case else body.case_id
+        
+        # Notify Banker & Underwriters
+        if case:
+            banker_res = await db.execute(select(User).where(User.id == case.banker_id))
+            banker = banker_res.scalar_one_or_none()
+            if banker:
+                await create_in_app_notification(
+                    db,
+                    recipient_id=banker.id,
+                    recipient_email=banker.email,
+                    subject="Customer Consent Received",
+                    body=f"Customer has selected a quote and verified OTP consent for Case {case_number}.",
+                    reference_id=body.case_id,
+                )
+            uw_res = await db.execute(select(User).where(User.role == "UNDERWRITER"))
+            for uw in uw_res.scalars().all():
+                await create_in_app_notification(
+                    db,
+                    recipient_id=uw.id,
+                    recipient_email=uw.email,
+                    subject="New Case in Underwriting Queue",
+                    body=f"Customer has provided OTP consent for Case {case_number}. Please request required KYC and Medical documents.",
+                    reference_id=body.case_id,
+                )
+
         subject, body_html = stage_message(
             case_number,
             "OTP_CONSENT",
-            "Consent verified successfully using the test OTP override. Proposal review by banker is now pending.",
+            "Consent verified successfully using the test OTP override. Underwriting review is now pending.",
         )
         await queue_and_send_email(
             db,
@@ -328,10 +374,35 @@ async def verify_otp(
     await db.commit()
 
     case_number = case.case_number if case else body.case_id
+
+    # Notify Banker & Underwriters
+    if case:
+        banker_res = await db.execute(select(User).where(User.id == case.banker_id))
+        banker = banker_res.scalar_one_or_none()
+        if banker:
+            await create_in_app_notification(
+                db,
+                recipient_id=banker.id,
+                recipient_email=banker.email,
+                subject="Customer Consent Received",
+                body=f"Customer has selected a quote and verified OTP consent for Case {case_number}.",
+                reference_id=body.case_id,
+            )
+        uw_res = await db.execute(select(User).where(User.role == "UNDERWRITER"))
+        for uw in uw_res.scalars().all():
+            await create_in_app_notification(
+                db,
+                recipient_id=uw.id,
+                recipient_email=uw.email,
+                subject="New Case in Underwriting Queue",
+                body=f"Customer has provided OTP consent for Case {case_number}. Please request required KYC and Medical documents.",
+                reference_id=body.case_id,
+            )
+
     subject, body_html = stage_message(
         case_number,
         "OTP_CONSENT",
-        "Consent verified successfully. Proposal review by banker is now pending.",
+        "Consent verified successfully. Underwriting review is now pending.",
     )
     await queue_and_send_email(
         db,
