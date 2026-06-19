@@ -17,6 +17,7 @@ from backend.app.models.all_models import (
     WorkflowStageLog,
     User,
     UserRole,
+    MedicalRequest,
 )
 from backend.app.repositories.user_repository import UserRepository
 from backend.app.services.notification_service import (
@@ -387,7 +388,9 @@ async def list_cases(
         else current_user.role
     )
     from sqlalchemy.orm import selectinload
-    q = select(Case).options(selectinload(Case.medical_requests))
+    q = select(Case).options(
+        selectinload(Case.medical_requests).selectinload(MedicalRequest.documents)
+    )
     if role == "BANKER":
         q = q.where(Case.banker_id == str(current_user.id))
     elif role == "CUSTOMER":
@@ -404,7 +407,9 @@ async def list_customer_cases(
     current_user: User = Depends(get_current_user),
 ):
     from sqlalchemy.orm import selectinload
-    q = select(Case).where(Case.customer_id == customer_id).options(selectinload(Case.medical_requests))
+    q = select(Case).where(Case.customer_id == customer_id).options(
+        selectinload(Case.medical_requests).selectinload(MedicalRequest.documents)
+    )
     result = await db.execute(q.order_by(Case.created_at.desc()))
     cases = result.scalars().all()
     return {"cases": [_s(c) for c in cases]}
@@ -417,7 +422,13 @@ async def get_case(
     current_user: User = Depends(get_current_user),
 ):
     from sqlalchemy.orm import selectinload
-    r = await db.execute(select(Case).where(Case.id == case_id).options(selectinload(Case.medical_requests)))
+    r = await db.execute(
+        select(Case)
+        .where(Case.id == case_id)
+        .options(
+            selectinload(Case.medical_requests).selectinload(MedicalRequest.documents)
+        )
+    )
     c = r.scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Case not found")
@@ -635,12 +646,34 @@ async def customize_case(
 
 def _s(c: Case) -> dict:
     has_med = False
+    doc_status = "Not Requested"
+    uploaded_count = 0
+    
     if "medical_requests" in c.__dict__:
         for mr in c.medical_requests:
             remarks = mr.ops_remarks or ""
             if remarks not in {"Underwriter raised query", "Customer response to query"}:
                 has_med = True
-                break
+            
+            if "documents" in mr.__dict__ and mr.documents:
+                uploaded_count += len(mr.documents)
+                
+        stage_val = c.current_stage.value if hasattr(c.current_stage, "value") else str(c.current_stage)
+        if stage_val in {"MEDICAL_COORDINATION", "UNDERWRITING", "POLICY_ISSUANCE", "COMPLETED"}:
+            if uploaded_count > 0:
+                all_verified = True
+                for mr in c.medical_requests:
+                    if "documents" in mr.__dict__ and mr.documents:
+                        for doc in mr.documents:
+                            if not doc.verified:
+                                all_verified = False
+                if all_verified:
+                    doc_status = "Verified"
+                else:
+                    doc_status = "Uploaded (Pending Review)"
+            else:
+                doc_status = "Pending Upload"
+
     return {
         "id": c.id,
         "case_number": c.case_number,
@@ -669,4 +702,5 @@ def _s(c: Case) -> dict:
             c.last_activity_at.isoformat() if c.last_activity_at else None
         ),
         "has_medical_requests": has_med,
+        "document_upload_status": doc_status,
     }

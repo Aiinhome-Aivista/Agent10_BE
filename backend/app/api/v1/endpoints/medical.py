@@ -26,6 +26,7 @@ async def cases_for_uw(
     result = await db.execute(
         select(Case)
         .where(Case.current_stage.in_([
+            CaseStage.OTP_CONSENT,
             CaseStage.PROPOSAL_GENERATION,
             CaseStage.MEDICAL_COORDINATION,
             CaseStage.UNDERWRITING,

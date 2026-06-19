@@ -24,20 +24,57 @@ class UWDecisionBody(BaseModel):
 @router.get("/queue")
 async def uw_queue(db: AsyncSession = Depends(get_db),
                    current_user=Depends(require_roles("UNDERWRITER", "SUPER_ADMIN"))):
+    from sqlalchemy.orm import selectinload
     r = await db.execute(
-        select(Case).where(
+        select(Case)
+        .where(
             Case.current_stage.in_([
+                CaseStage.OTP_CONSENT,
                 CaseStage.PROPOSAL_GENERATION,
                 CaseStage.MEDICAL_COORDINATION,
                 CaseStage.UNDERWRITING,
             ])
         )
+        .options(selectinload(Case.medical_requests).selectinload(MedicalRequest.documents))
+        .order_by(Case.created_at.desc())
     )
     cases = r.scalars().all()
-    return {"queue": [{"id": c.id, "case_number": c.case_number, "sum_assured": c.sum_assured,
-                        "stage": str(c.current_stage), "customer_profile": c.customer_profile,
-                        "created_at": c.created_at.isoformat() if c.created_at else None}
-                       for c in cases]}
+    
+    out = []
+    for c in cases:
+        doc_status = "Not Requested"
+        uploaded_count = 0
+        if c.medical_requests:
+            for mr in c.medical_requests:
+                if mr.documents:
+                    uploaded_count += len(mr.documents)
+            
+            stage_val = c.current_stage.value if hasattr(c.current_stage, "value") else str(c.current_stage)
+            if stage_val in {"MEDICAL_COORDINATION", "UNDERWRITING", "POLICY_ISSUANCE", "COMPLETED"}:
+                if uploaded_count > 0:
+                    all_verified = True
+                    for mr in c.medical_requests:
+                        for doc in mr.documents:
+                            if not doc.verified:
+                                all_verified = False
+                    if all_verified:
+                        doc_status = "Verified"
+                    else:
+                        doc_status = "Uploaded (Pending Review)"
+                else:
+                    doc_status = "Pending Upload"
+                    
+        out.append({
+            "id": c.id,
+            "case_number": c.case_number,
+            "sum_assured": float(c.sum_assured) if c.sum_assured else None,
+            "stage": str(c.current_stage),
+            "customer_profile": c.customer_profile,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "document_upload_status": doc_status,
+            "kyc_status": c.kyc_status,
+        })
+    return {"queue": out}
 
 
 
