@@ -13,7 +13,7 @@ from configs.base import settings
 from backend.app.core.database import get_db
 from backend.app.core.security import get_current_user, require_roles
 from backend.app.models.user import User, UserRole
-from backend.app.models.all_models import MedicalDocument, MedicalRequest
+from backend.app.models.all_models import MedicalDocument, MedicalRequest, Case
 from fastapi import Header
 from typing import Optional
 from fastapi.responses import FileResponse
@@ -61,8 +61,36 @@ async def upload_document(
         file_path=save_path,
         file_size=len(content),
         mime_type=file.content_type,
+        verified=1,
+        verified_by="SYSTEM_AUTO",
     )
     db.add(doc)
+
+    # Run LLM Document Verification and Aadhaar/PAN Details Extraction
+    try:
+        case_res = await db.execute(select(Case).where(Case.id == med_req.case_id))
+        case = case_res.scalar_one_or_none()
+        if case:
+            from backend.app.services.document_verification_service import verify_kyc_document_with_llm
+            is_kyc = (document_type == "KYC" or "kyc" in document_type.lower() or 
+                      "pan" in (file.filename or "").lower() or "aadhar" in (file.filename or "").lower() or 
+                      "aadhaar" in (file.filename or "").lower())
+            if is_kyc:
+                verified, ext_type = await verify_kyc_document_with_llm(
+                    doc_type=document_type,
+                    file_path=save_path,
+                    filename=file.filename or save_name,
+                    db=db,
+                    case=case
+                )
+                if verified:
+                    doc.verified = 1
+                    doc.verified_by = f"SYSTEM_LLM_{ext_type}"
+                    db.add(case)
+    except Exception as ex:
+        import logging
+        logging.getLogger(__name__).error(f"Error during auto-verification of uploaded document in documents.py: {ex}")
+
     await db.commit()
     await db.refresh(doc)
 

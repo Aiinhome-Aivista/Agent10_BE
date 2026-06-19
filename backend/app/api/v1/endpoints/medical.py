@@ -310,8 +310,38 @@ async def upload_medical_doc(
         file_path=save_path,
         file_size=len(content),
         mime_type=file.content_type,
+        verified=1,
+        verified_by="SYSTEM_AUTO",
     )
     db.add(doc)
+
+    # Run LLM Document Verification and Aadhaar/PAN Details Extraction
+    try:
+        mr_res = await db.execute(select(MedicalRequest).where(MedicalRequest.id == medical_request_id))
+        mr = mr_res.scalar_one_or_none()
+        if mr:
+            case_res = await db.execute(select(Case).where(Case.id == mr.case_id))
+            case = case_res.scalar_one_or_none()
+            if case:
+                from backend.app.services.document_verification_service import verify_kyc_document_with_llm
+                is_kyc = (document_type == "KYC" or "kyc" in document_type.lower() or 
+                          "pan" in file.filename.lower() or "aadhar" in file.filename.lower() or 
+                          "aadhaar" in file.filename.lower())
+                if is_kyc:
+                    verified, ext_type = await verify_kyc_document_with_llm(
+                        doc_type=document_type,
+                        file_path=save_path,
+                        filename=file.filename,
+                        db=db,
+                        case=case
+                    )
+                    if verified:
+                        doc.verified = 1
+                        doc.verified_by = f"SYSTEM_LLM_{ext_type}"
+                        db.add(case)
+    except Exception as ex:
+        logger.error(f"Error during auto-verification of uploaded document: {ex}")
+
     await db.commit()
     return {"message": "Document uploaded", "doc_id": doc_id, "file_path": save_path}
 
