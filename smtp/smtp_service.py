@@ -37,6 +37,52 @@ class SMTPService:
         logger.error(f"Failed to send email to {to} after {max_retry} attempts")
         return False
 
+    async def send_with_pdf(self, to: str, subject: str, html_body: str, pdf_path: str, pdf_filename: str, max_retry: int = 3) -> bool:
+        from email.mime.application import MIMEApplication
+        import os
+
+        msg = MIMEMultipart("mixed")
+        msg["From"]    = settings.SMTP_FROM_EMAIL
+        msg["To"]      = to
+        msg["Subject"] = subject
+
+        # Attach HTML body
+        body_part = MIMEMultipart("alternative")
+        body_part.attach(MIMEText(html_body, "html"))
+        msg.attach(body_part)
+
+        # Attach PDF file if exists
+        if os.path.exists(pdf_path):
+            try:
+                with open(pdf_path, "rb") as f:
+                    pdf_data = f.read()
+                attachment = MIMEApplication(pdf_data, _subtype="pdf")
+                attachment.add_header('Content-Disposition', 'attachment', filename=pdf_filename)
+                msg.attach(attachment)
+            except Exception as e:
+                logger.error(f"Failed to attach PDF file {pdf_path}: {e}")
+
+        for attempt in range(1, max_retry + 1):
+            try:
+                await aiosmtplib.send(
+                    msg,
+                    hostname=settings.SMTP_HOST,
+                    port=settings.SMTP_PORT,
+                    username=settings.SMTP_USERNAME,
+                    password=settings.SMTP_PASSWORD,
+                    use_tls=settings.SMTP_SSL,
+                    start_tls=settings.SMTP_TLS,
+                )
+                logger.info(f"Email with PDF sent to {to} (attempt {attempt})")
+                return True
+            except Exception as e:
+                logger.warning(f"SMTP attempt {attempt} failed: {e}")
+                if attempt < max_retry:
+                    await asyncio.sleep(2 ** attempt)
+        logger.error(f"Failed to send email with PDF to {to} after {max_retry} attempts")
+        return False
+
+
     async def send_otp(self, to: str, otp_code: str, case_number: str) -> bool:
         subject = f"Q2P Platform — Your OTP for Case {case_number}"
         body = f"""
