@@ -177,6 +177,35 @@ async def uw_decision(body: UWDecisionBody, db: AsyncSession = Depends(get_db),
             body=f"Underwriter has requested additional documents or information for Case {case.case_number}: {body.remarks or 'Please upload requested documents.'}",
             reference_id=case.id,
         )
+        
+        # Send Email notification
+        from backend.app.services.notification_service import queue_and_send_email
+        email_subject = "Action Required: KYC & Medical Documents Requested"
+        email_body = f"""
+        <div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;padding:24px;
+                    background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;">
+            <h2 style="margin:0 0 12px;color:#f59e0b;">Action Required: Documents Requested</h2>
+            <p style="margin:0 0 8px;color:#374151;">Hello {customer.name or 'Valued Customer'},</p>
+            <p style="margin:0 0 8px;color:#374151;">The underwriter has requested additional documents or information for Case <strong>{case.case_number}</strong>:</p>
+            <div style="background:#fffbeb;border:1px solid #fef3c7;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px;color:#b45309;">
+                <strong>Remarks from Underwriter:</strong><br>
+                {body.remarks or 'Please upload requested documents.'}
+            </div>
+            <p style="margin:0 0 16px;color:#374151;">Please sign in to the Q2P dashboard, navigate to <strong>Upload Documents</strong>, and upload the requested files.</p>
+            <p style="margin:0;color:#6b7280;font-size:12px;">Thank you for using Q2P Insurance Platform.</p>
+        </div>
+        """
+        await queue_and_send_email(
+            db,
+            recipient_email=customer.email,
+            subject=email_subject,
+            body=email_body,
+            recipient_id=customer.id,
+            reference_type="CASE",
+            reference_id=case.id,
+            notification_type="EMAIL"
+        )
+
         if banker:
             await create_in_app_notification(
                 db,

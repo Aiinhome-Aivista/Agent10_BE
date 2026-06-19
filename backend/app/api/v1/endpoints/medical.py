@@ -147,6 +147,7 @@ async def list_customer_medical_requests(
                 "id": q.id,
                 "case_id": q.case_id,
                 "requirements": q.requirements,
+                "ops_remarks": q.ops_remarks,
                 "status": q.status,
                 "created_at": q.created_at.isoformat() if q.created_at else None,
             }
