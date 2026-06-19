@@ -234,10 +234,22 @@ async def suggest_params(
 
     from llm.llm_service import LLMService
     from llm.response_parser import ResponseParser
+    from rag.rag_pipeline import semantic_search
     
     llm = LLMService()
     rp = ResponseParser()
     
+    kb_context = ""
+    try:
+        chunks = await semantic_search("underwriting guidelines eligibility sum assured recommendations loading rules", top_k=4)
+        if chunks:
+            kb_context = "\n\n---\n\n".join([
+                f"Source: {c['title']}\n{c['text']}" for c in chunks
+            ])
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"RAG search failed in suggest_params: {e}")
+
     prompt = f"""You are an AI insurance advisor suggesting recommended cover parameters for a prospect.
 Analyze the customer's profile:
 - Name: {profile.get("name") or profile.get("Full_Name") or "Prospect"}
@@ -256,13 +268,15 @@ We calculated these base parameters using actuarial formulas:
 - Calculated Premium per Year: ₹{suggested_premium:,}
 - Policy Tenure: {tenure} years
 
+RETRIEVED UNDERWRITING GUIDELINES / KNOWLEDGE BASE:
+{kb_context if kb_context else "No specific documents found. Use standard actuarial recommendation guidelines."}
+
 Your task:
-1. Review these parameters and adjust them if needed to be optimal and realistic.
+1. Review these parameters and adjust them if needed to be optimal, realistic, and compliant with any retrieved underwriting guidelines.
 2. Provide a personalized reasoning sentence explaining why this Sum Assured and Premium are recommended.
 3. Be specific in the reasoning about:
-   - Location loading (e.g. 15% Mumbai/Hyderabad Tier-1 load) if applicable.
-   - Medical history (e.g. 25% Hypertension load) or smoking status (30% load) if applicable.
-   - For Zeeshan Sahni, suggest Option A (₹10L base cover + ₹25L super top-up for ₹23k budget) or Option B (₹20L base + ₹50L top-up for ₹35k-45k best value) inside the reasoning text if appropriate.
+   - Any location loading or medical/smoker loading found in the guidelines or standard rules.
+   - If the guidelines contain specific options or top-ups (e.g. Option A base cover + super top-up) for this customer's income/profile, recommend them in the reasoning text.
 4. Keep the sum assured and premium budget as clean integers.
 
 Return ONLY a valid JSON object matching the schema:
