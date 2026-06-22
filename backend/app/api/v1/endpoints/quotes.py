@@ -240,3 +240,55 @@ async def list_quotes(
             for q in quotes
         ]
     }
+
+
+from typing import List, Optional
+
+class PublicQuotePayload(BaseModel):
+    gender: str
+    selectedMembers: List[str]
+    age: int
+    city: str
+    fullName: str
+    mobileNumber: str
+    email: str
+    medicalHistory: List[str]
+    customDisease: Optional[str] = None
+    whatsappConsent: Optional[bool] = False
+
+@router.post("/public")
+async def fetch_public_quotes(
+    body: PublicQuotePayload,
+    db: AsyncSession = Depends(get_db)
+):
+    # Find which insurers are present in document titles dynamically
+    r_docs = await db.execute(select(KnowledgeDocument).where(KnowledgeDocument.status == 'INDEXED'))
+    docs = r_docs.scalars().all()
+    insurers_in_kb = []
+    import re
+    for d in docs:
+        words = [w.upper() for w in re.findall(r'[a-zA-Z]+', d.title)]
+        if len(words) >= 2 and words[0] in ["SBI", "HDFC", "ICICI", "LIC", "NIVA", "MAX", "ADITYA", "ACTIV", "RELIANCE", "TATA", "BAJAJ", "KOTAK"]:
+            insurers_in_kb.append(f"{words[0]}_{words[1]}")
+        elif words:
+            insurers_in_kb.append(words[0])
+
+    payload = {
+        "sum_assured": 2500000, # default to 25 Lakhs as in screenshot
+        "premium_budget": 50000,
+        "policy_tenure": 1,
+        "customer_profile": {
+            "name": body.fullName,
+            "age": body.age,
+            "gender": body.gender,
+            "email": body.email,
+            "phone": body.mobileNumber,
+            "city": body.city,
+            "medical_history": ", ".join(body.medicalHistory) + (f" ({body.customDisease})" if body.customDisease else "")
+        },
+        "insurers": list(set(insurers_in_kb)),
+    }
+    
+    quotes = await fetch_all_quotes(payload)
+    return {"quotes": quotes}
+
