@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: aiinhome-aivista/gent_10_be
+  IMAGE_NAME: aiinhome-aivista/agent_10_be
   CONTAINER_NAME: agent-10-be
   PORT: 3037
 
